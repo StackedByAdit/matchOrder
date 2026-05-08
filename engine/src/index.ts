@@ -125,7 +125,7 @@ function handleEngineRequest(message: EngineRequest): unknown {
       const remainingSell = sellOrder.qty - sellOrder.filledQty;
       const tradeQty = Math.min(remainingBuy, remainingSell);
 
-      order.qty += tradeQty;
+      order.filledQty += tradeQty;
       sellOrder.filledQty += tradeQty;
 
       FILLS.push({
@@ -134,20 +134,92 @@ function handleEngineRequest(message: EngineRequest): unknown {
         price: price,
         qty: tradeQty,
         buyOrderId: userId,
-        sellOrderId: sellOrder.userId ,
+        sellOrderId: sellOrder.userId,
         createdAt: Date.now()
       });
+
+      if (ordersAtPrice.length === 0) {
+        firm.bids.delete(askPrice);
+      }
     }
 
     if (!firm) {
       throw new Error("Invalid symbol");
     }
 
-    const fills = [];
   } else {
 
+  if (side === "sell") {
+
+    const bidPrices = Object.keys(firm.bids)
+
+    const pricesToNumber = bidPrices.map((str) => Number(str));
+
+    pricesToNumber.sort((a, b) => b - a);
+
+    let remainingQty = qty;
+
+    for (const bidPrice of pricesToNumber) {
+
+      if (type === "limit" && bidPrice < price) {
+        break;
+      }
+
+      const ordersAtPrice = firm.bids.get(bidPrice);
+
+      if (!ordersAtPrice) continue;
+
+      for (const buyOrder of ordersAtPrice) {
+
+        if (remainingQty <= 0) break;
+
+        const availableQty =
+          buyOrder.qty - buyOrder.filledQty;
+
+        const matchedQty = Math.min(
+          remainingQty,
+          availableQty
+        );
+
+        buyOrder.filledQty += matchedQty;
+
+        remainingQty -= matchedQty;
+
+        FILLS.push({
+          fillId: crypto.randomUUID(),
+          symbol: symbol,
+          price: bidPrice,
+          qty: matchedQty,
+          buyOrderId: buyOrder.userId,
+          sellOrderId: userId,
+          createdAt: Date.now()
+        });
+
+        if (buyOrder.filledQty === buyOrder.qty) {
+          buyOrder.status = "filled";
+        } else {
+          buyOrder.status = "partially_filled";
+        }
+      }
+
+      if (ordersAtPrice.length === 0) {
+        firm.bids.delete(bidPrice);
+      }
+
+
+      if (remainingQty <= 0) break;
+    }
+
+    order.filledQty = qty - remainingQty;
+
+    if (remainingQty === 0) {
+      order.status = "filled";
+    } else if (order.filledQty > 0) {
+      order.status = "partially_filled";
+    }
   }
 
+}
 
   // just checking the flow, remove this when you start implementing the logic
   if (message.type === "create_order") {
