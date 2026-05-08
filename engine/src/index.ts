@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { createClient } from "redis";
 import { env } from "./utils/env.js";
+import { FILLS, ORDERBOOKS } from "./store/exchange-store.js";
 
 export type EngineCommandType =
   | "create_order"
@@ -66,6 +67,88 @@ function handleEngineRequest(message: EngineRequest): unknown {
    * - cancel_order
    */
 
+  const {
+    userId,
+    symbol,
+    side,
+    type,
+    price,
+    qty,
+  } = message.payload as {
+    userId: string;
+    symbol: string;
+    side: "buy" | "sell";
+    type: "limit" | "market";
+    price: number;
+    qty: number;
+  };
+
+  const order = {
+    orderId: crypto.randomUUID(),
+    userId,
+    symbol,
+    side,
+    type,
+    price,
+    qty,
+    filledQty: 0,
+    status: "open",
+  };
+
+  const firm = ORDERBOOKS.get(symbol);
+
+  if (!firm) {
+    return;
+  }
+
+  if (side === "buy") {
+
+    const askPrices = Object.keys(firm.asks)
+
+    const pricesToNumber = askPrices.map((str) => Number(str));
+
+    pricesToNumber.sort((a, b) => a - b);
+
+    for (const askPrice of pricesToNumber) {
+
+      if (type === "limit" && askPrice > price) {
+        break;
+      }
+
+      const ordersAtPrice = firm.asks.get(price);
+      if (!ordersAtPrice) continue;
+
+      const sellOrder = ordersAtPrice[0];
+      if (!sellOrder) break;
+
+      const remainingBuy = order.qty - order.filledQty;
+      const remainingSell = sellOrder.qty - sellOrder.filledQty;
+      const tradeQty = Math.min(remainingBuy, remainingSell);
+
+      order.qty += tradeQty;
+      sellOrder.filledQty += tradeQty;
+
+      FILLS.push({
+        fillId: crypto.randomUUID(),
+        symbol: symbol,
+        price: price,
+        qty: tradeQty,
+        buyOrderId: userId,
+        sellOrderId: sellOrder.userId ,
+        createdAt: Date.now()
+      });
+    }
+
+    if (!firm) {
+      throw new Error("Invalid symbol");
+    }
+
+    const fills = [];
+  } else {
+
+  }
+
+
   // just checking the flow, remove this when you start implementing the logic
   if (message.type === "create_order") {
     return {
@@ -92,7 +175,7 @@ function handleEngineRequest(message: EngineRequest): unknown {
 
 console.log(`Engine listening on Redis queue: ${env.incomingQueue}`);
 
-for (;;) {
+for (; ;) {
   const item = await brokerClient.brPop(env.incomingQueue, 0);
   if (!item) continue;
 
